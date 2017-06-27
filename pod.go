@@ -18,10 +18,11 @@ type PodHandler struct {
 
 func (p *PodHandler) podFields(pod *v1.Pod) log.Fields {
 	return log.Fields{
-		"pod.name":      pod.GetName(),
-		"pod.namespace": pod.GetNamespace(),
-		"pod.status.ip": pod.Status.PodIP,
-		"pod.iam.role":  pod.GetAnnotations()[p.storage.IamRoleKey],
+		"pod.name":         pod.GetName(),
+		"pod.namespace":    pod.GetNamespace(),
+		"pod.status.ip":    pod.Status.PodIP,
+		"pod.status.phase": pod.Status.Phase,
+		"pod.iam.role":     pod.GetAnnotations()[p.storage.IamRoleKey],
 	}
 }
 
@@ -35,9 +36,9 @@ func (p *PodHandler) OnAdd(obj interface{}) {
 	logger := log.WithFields(p.podFields(pod))
 	logger.Debug("Pod OnAdd")
 
-	p.storage.AddNamespaceToIP(pod)
-
-	if pod.Status.PodIP != "" {
+	if pod.Status.PodIP != "" &&
+		(pod.Status.Phase == v1.PodPending || pod.Status.Phase == v1.PodRunning || pod.Status.Phase == v1.PodUnknown) {
+		p.storage.AddNamespaceToIP(pod)
 		if role, ok := pod.GetAnnotations()[p.storage.IamRoleKey]; ok {
 			logger.Info("Adding pod to store")
 			p.storage.AddRoleToIP(pod, role)
@@ -47,6 +48,7 @@ func (p *PodHandler) OnAdd(obj interface{}) {
 
 func (p *PodHandler) shouldUpdate(oldPod, newPod *v1.Pod) bool {
 	return oldPod.Status.PodIP != newPod.Status.PodIP ||
+		oldPod.Status.Phase != newPod.Status.Phase ||
 		annotationDiffers(oldPod.GetAnnotations(), newPod.GetAnnotations(), p.storage.IamRoleKey)
 }
 
@@ -62,7 +64,7 @@ func (p *PodHandler) OnUpdate(oldObj, newObj interface{}) {
 	logger.Debug("Pod OnUpdate")
 
 	if p.shouldUpdate(oldPod, newPod) {
-		logger.Info("Updating pod due to added/updated annotation value or different pod IP")
+		logger.Info("Updating pod due to added/updated annotation value or different pod IP or phase change")
 		p.mutex.Lock()
 		defer p.mutex.Unlock()
 		p.OnDelete(oldPod)
@@ -88,7 +90,8 @@ func (p *PodHandler) OnDelete(obj interface{}) {
 	logger := log.WithFields(p.podFields(pod))
 	logger.Debug("Pod OnDelete")
 
-	if pod.Status.PodIP != "" {
+	if pod.Status.PodIP != "" &&
+		(pod.Status.Phase == v1.PodPending || pod.Status.Phase == v1.PodRunning || pod.Status.Phase == v1.PodUnknown) {
 		logger.Info("Removing pod from store")
 		p.storage.DeleteIP(pod.Status.PodIP)
 	}
